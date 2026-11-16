@@ -3,6 +3,7 @@ import { esperarBanco, fecharPool } from '../db/pool';
 import { migrar } from '../db/migracao';
 import { criarConexaoRedis } from '../fila/fila';
 import { log } from '../telemetria/log';
+import { registrarExcecaoNoSpan } from '../telemetria/rastreio';
 import { medirRequisicoes } from './metricas-http';
 import { criarRotas } from './rotas';
 
@@ -21,6 +22,7 @@ async function iniciar(): Promise<void> {
 
   aplicacao.use(
     (erro: Error, _requisicao: Request, resposta: Response, _proximo: NextFunction) => {
+      registrarExcecaoNoSpan(erro);
       log.error('erro ao atender requisicao: ' + erro.message);
       resposta.status(500).json({ erro: 'erro interno' });
     }

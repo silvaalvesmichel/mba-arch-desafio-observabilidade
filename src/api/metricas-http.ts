@@ -10,6 +10,8 @@ const duracaoDasRequisicoes = new client.Histogram({
   registers: [registro],
 });
 
+const ROTA_NAO_MAPEADA = 'nao_mapeada';
+
 export function medirRequisicoes(
   requisicao: Request,
   resposta: Response,
@@ -19,7 +21,9 @@ export function medirRequisicoes(
 
   resposta.on('finish', () => {
     encerrarMedicao({
-      route: requisicao.path,
+      // Route template (/produtos/:id), never the concrete path: one series per route,
+      // not one per id. Requests that match no route share a single fixed value.
+      route: requisicao.route?.path ?? ROTA_NAO_MAPEADA,
       method: requisicao.method,
       status: String(resposta.statusCode),
     });

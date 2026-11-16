@@ -1,0 +1,38 @@
+# SLO: 99,9% das cobrancas processadas sem falha tecnica, em janela de 30 dias.
+# Error budget: 1 - 0,999 = 0,1% das cobrancas da janela.
+#
+# Limiar: taxa de queima (burn rate) de 14,4, que e a velocidade em que 2% do
+# budget de 30 dias vai embora em 1 hora: 0,02 * (30 * 24h) / 1h = 14,4.
+# Proporcao de falha equivalente: 14,4 * 0,001 = 0,0144 (1,44%).
+#
+# Duas janelas com o mesmo limiar: a de 1h prova que a queima e relevante para o
+# budget, a de 5m prova que ainda esta acontecendo e faz o alerta fechar logo
+# depois que a falha para.
+groups:
+  - name: slo-cobrancas
+    rules:
+      - alert: FalhaEmCobrancas
+        expr: |
+          (
+              sum(rate(cobrancas_processadas_total{resultado="falha"}[1h]))
+            /
+              sum(rate(cobrancas_processadas_total[1h]))
+          ) > (14.4 * 0.001)
+          and
+          (
+              sum(rate(cobrancas_processadas_total{resultado="falha"}[5m]))
+            /
+              sum(rate(cobrancas_processadas_total[5m]))
+          ) > (14.4 * 0.001)
+        for: 30s
+        labels:
+          severity: critico
+          slo: cobrancas-sem-falha
+        annotations:
+          summary: Cobrancas falhando acima do que o SLO de 99,9% tolera
+          description: >-
+            {{ $value | humanizePercentage }} das cobrancas da ultima hora terminaram em
+            falha tecnica. Acima de 1,44% o error budget de 30 dias queima 14,4 vezes
+            mais rapido que o permitido. Pedidos com cobranca em falha estao sendo
+            confirmados sem cobranca: busque no log do worker por level=error e abra o
+            trace_id da linha no Jaeger.

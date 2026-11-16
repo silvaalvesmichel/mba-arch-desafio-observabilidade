@@ -10,7 +10,8 @@ import {
 } from '../db/consultas';
 import { publicarPedido } from '../fila/fila';
 import { log } from '../telemetria/log';
-import { TIPO_DE_CONTEUDO, coletar } from '../telemetria/metricas';
+import { TIPO_DE_CONTEUDO, coletar, pedidosCriados } from '../telemetria/metricas';
+import { motivoDe, registrarExcecaoNoSpan, tracer } from '../telemetria/rastreio';
 
 export function criarRotas(redis: Redis): Router {
   const rotas = Router();
@@ -48,34 +49,54 @@ export function criarRotas(redis: Redis): Router {
   });
 
   rotas.post('/pedidos', async (requisicao, resposta) => {
-    const clienteId = requisicao.body?.cliente_id;
-    const itens: ItemNovoPedido[] = requisicao.body?.itens;
+    await tracer.startActiveSpan('pedido.criar', async (span) => {
+      try {
+        const clienteId = requisicao.body?.cliente_id;
+        const itens: ItemNovoPedido[] = requisicao.body?.itens;
 
-    if (typeof clienteId !== 'string' || !Array.isArray(itens) || itens.length === 0) {
-      resposta.status(400).json({ erro: 'cliente_id e itens sao obrigatorios' });
-      return;
-    }
+        if (typeof clienteId !== 'string' || !Array.isArray(itens) || itens.length === 0) {
+          resposta.status(400).json({ erro: 'cliente_id e itens sao obrigatorios' });
+          return;
+        }
 
-    const produtos = await buscarProdutosPorIds(itens.map((item) => item.produto_id));
-    const precoPorProduto = new Map(produtos.map((produto) => [produto.id, produto.preco]));
+        span.setAttribute('cliente.id', clienteId);
+        span.setAttribute('pedido.quantidade_de_itens', itens.length);
 
-    const faltando = itens.filter((item) => !precoPorProduto.has(item.produto_id));
-    if (faltando.length > 0) {
-      resposta.status(400).json({ erro: 'produto inexistente no pedido' });
-      return;
-    }
+        const produtos = await buscarProdutosPorIds(itens.map((item) => item.produto_id));
+        const precoPorProduto = new Map(produtos.map((produto) => [produto.id, produto.preco]));
 
-    const pedido = await criarPedido(clienteId, itens, precoPorProduto);
+        const faltando = itens.filter((item) => !precoPorProduto.has(item.produto_id));
+        if (faltando.length > 0) {
+          resposta.status(400).json({ erro: 'produto inexistente no pedido' });
+          return;
+        }
 
-    await publicarPedido(redis, {
-      pedido_id: pedido.id,
-      cliente_id: clienteId,
-      valor_total: pedido.valor_total,
+        const pedido = await criarPedido(clienteId, itens, precoPorProduto);
+
+        pedidosCriados.inc();
+        span.setAttribute('pedido.id', pedido.id);
+        span.setAttribute('pedido.valor_total', pedido.valor_total);
+
+        await publicarPedido(redis, {
+          pedido_id: pedido.id,
+          cliente_id: clienteId,
+          valor_total: pedido.valor_total,
+        });
+
+        log.info('pedido ' + pedido.id + ' criado para ' + clienteId, {
+          pedido_id: pedido.id,
+        });
+
+        resposta.status(202).json({ pedido_id: pedido.id, status: 'pendente' });
+      } catch (erro) {
+        registrarExcecaoNoSpan(erro);
+        log.error('erro ao criar pedido: ' + motivoDe(erro), { motivo: motivoDe(erro) });
+        // Express 4 does not catch async handler errors; rethrow keeps that behavior.
+        throw erro;
+      } finally {
+        span.end();
+      }
     });
-
-    log.info('pedido ' + pedido.id + ' criado para ' + clienteId);
-
-    resposta.status(202).json({ pedido_id: pedido.id, status: 'pendente' });
   });
 
   rotas.get('/pedidos/:id', async (requisicao, resposta) => {

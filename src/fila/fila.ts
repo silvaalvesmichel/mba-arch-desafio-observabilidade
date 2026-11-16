@@ -1,3 +1,4 @@
+import { context, propagation } from '@opentelemetry/api';
 import Redis from 'ioredis';
 
 export const NOME_DA_FILA = 'pedidos';
@@ -18,7 +19,11 @@ export async function publicarPedido(
   redis: Redis,
   mensagem: MensagemPedido
 ): Promise<void> {
-  await redis.lpush(NOME_DA_FILA, JSON.stringify(mensagem));
+  // W3C Trace Context travels inside the message: the queue carries no headers.
+  const rastreio: Record<string, string> = {};
+  propagation.inject(context.active(), rastreio);
+
+  await redis.lpush(NOME_DA_FILA, JSON.stringify({ ...mensagem, rastreio }));
 }
 
 export async function consumirPedido(
